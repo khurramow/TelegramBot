@@ -1,55 +1,57 @@
 <?php
 
-require 'vendor/autoload.php';
+declare(strict_types=1);
 
-use GuzzleHttp\Client;
+require 'Currency.php';
 
-$token = "7257193222:AAFfOnGBS-XWEmODlWkID_hvFfUO07yXuRs";
-$tgApi = "https://api.telegram.org/bot$token/";
+$host = 'localhost';
+$db = 'currency_bot';
+$user = 'root';
+$pass = 'root';
 
-$client = new Client(['base_uri' => $tgApi]);
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    die("Could not connect to the database: " . $e->getMessage());
+}
 
-$update = json_decode(file_get_contents('php://input'));
+$bot_token = '7257193222:AAGFSmGTvRlkTWN909AGNwpKiFZO9m0GK38';
 
-if (isset($update) && isset($update->message)) {
-    $message = $update->message;
-    $chat_id = $message->chat->id;
-    $text = $message->text;
+$input = file_get_contents('php://input');
+$update = json_decode($input, true);
 
-    if (!empty($text)) {
-        if (strpos($text, "/convert") === 0) {
-            $params = explode(" ", $text);
-            if (count($params) == 4) {
-                $amount = $params[1];
-                $from_currency = strtoupper($params[2]);
-                $to_currency = strtoupper($params[3]);
+if (isset($update['message'])) {
+    $message = $update['message'];
+    $chat_id = $message['chat']['id'];
+    $text = $message['text'];
 
-                require_once "Currency.php";
+    $parts = explode(' ', $text);
 
-                $currencyConverter = new Currency();
-                $converted = $currencyConverter->exchange((float)$amount, $from_currency, $to_currency);
+    if (count($parts) === 3) {
+        $amount = (float) $parts[0];
+        $from_currency = strtoupper($parts[1]);
+        $to_currency = strtoupper($parts[2]);
 
-                if ($converted !== null) {
-                    $responseText = "Konvertatsiya natijasi: $amount $from_currency = $converted $to_currency";
-                } else {
-                    $responseText = "Valyuta kursini olishda xatolik yuz berdi.";
-                }
-            } else {
-                $responseText = "Noto'g'ri format. To'g'ri format: /convert <miqdor> <from_valyuta> <to_valyuta>";
-            }
+        $currency = new Currency();
+        $converted_amount = $currency->exchange($amount, $from_currency, $to_currency);
+
+        if ($converted_amount !== null) {
+            $stmt = $pdo->prepare("INSERT INTO conversions (from_currency, to_currency, amount, converted_amount) VALUES (:from_currency, :to_currency, :amount, :converted_amount)");
+            $stmt->execute([
+                ':from_currency' => $from_currency,
+                ':to_currency' => $to_currency,
+                ':amount' => $amount,
+                ':converted_amount' => $converted_amount
+            ]);
+
+            $response = "Converted $amount $from_currency to $converted_amount $to_currency.";
         } else {
-            $responseText = "Salom! Men valyuta konvertatsiyasi qilish uchun mo'ljallanganman. /convert buyrug'ini ishlatib valyutalarni konvertatsiya qiling.";
+            $response = "Failed to convert currency.";
         }
-
-        $client->post('sendMessage', [
-            'form_params' => [
-                'chat_id' => $chat_id,
-                'text' => $responseText
-            ]
-        ]);
     } else {
-        error_log("Xabar matni bo'sh.");
+        $response = "Invalid format. Use: amount from_currency to_currency";
     }
-} else {
-    error_log("Update yoki xabar mavjud emas.");
+
+    file_get_contents("https://api.telegram.org/bot$bot_token/sendMessage?chat_id=$chat_id&text=" . urlencode($response));
 }
